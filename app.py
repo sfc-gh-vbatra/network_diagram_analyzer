@@ -26,7 +26,6 @@ if 'stage_filename' not in st.session_state:
 if 'connection' not in st.session_state:
     st.session_state.connection = None
 
-@st.cache_resource
 def get_snowflake_connection():
     """Create Snowflake connection with key-pair authentication"""
     try:
@@ -57,6 +56,28 @@ def get_snowflake_connection():
     except Exception as e:
         st.error(f"Failed to connect to Snowflake: {str(e)}")
         return None
+
+def ensure_connection():
+    """Ensure we have a valid Snowflake connection, reconnecting if needed"""
+    if st.session_state.connection is None:
+        st.session_state.connection = get_snowflake_connection()
+        return st.session_state.connection
+    
+    # Test if connection is still valid
+    try:
+        cursor = st.session_state.connection.cursor()
+        cursor.execute("SELECT 1")
+        cursor.close()
+        return st.session_state.connection
+    except Exception as e:
+        # Connection expired or invalid, reconnect
+        st.warning("Reconnecting to Snowflake...")
+        try:
+            st.session_state.connection.close()
+        except:
+            pass
+        st.session_state.connection = get_snowflake_connection()
+        return st.session_state.connection
 
 def convert_visio_to_image(uploaded_file):
     """
@@ -186,16 +207,15 @@ if uploaded_file is not None:
         # Display the image
         st.image(image, caption="Uploaded Diagram", use_column_width=True)
         
-        # Initialize connection if needed
-        if st.session_state.connection is None:
-            with st.spinner("Connecting to Snowflake..."):
-                st.session_state.connection = get_snowflake_connection()
+        # Ensure valid connection
+        with st.spinner("Connecting to Snowflake..."):
+            connection = ensure_connection()
         
-        if st.session_state.connection:
+        if connection:
             # Upload image to Snowflake stage
             stage_filename = "diagram.png"
             with st.spinner("Uploading diagram to Snowflake..."):
-                success, uploaded_filename = upload_image_to_stage(st.session_state.connection, image, stage_filename)
+                success, uploaded_filename = upload_image_to_stage(connection, image, stage_filename)
                 if success and uploaded_filename:
                     st.session_state.stage_filename = uploaded_filename
                     st.session_state.diagram_uploaded = True
@@ -211,12 +231,10 @@ st.divider()
 if st.session_state.diagram_uploaded:
     st.subheader("Ask Questions")
     
-    # Initialize connection if not already done
-    if st.session_state.connection is None:
-        with st.spinner("Connecting to Snowflake..."):
-            st.session_state.connection = get_snowflake_connection()
+    # Ensure valid connection
+    connection = ensure_connection()
     
-    if st.session_state.connection:
+    if connection:
         # Display chat history
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
@@ -233,7 +251,7 @@ if st.session_state.diagram_uploaded:
             with st.chat_message("assistant"):
                 with st.spinner("Analyzing..."):
                     response = query_cortex_complete(
-                        st.session_state.connection,
+                        connection,
                         prompt,
                         st.session_state.stage_filename
                     )
